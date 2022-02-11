@@ -1,0 +1,15 @@
+[package]
+name = "ats_plugin"
+version = "0.1.0"
+authors = ["BVE Workshop <bveworkshop@gmail.com>", "WATANABE Yuki <magicant@wonderwand.net>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "ats_plugin"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+winapi = { version = "0.3.9", features = ["minwindef"] }
