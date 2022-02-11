@@ -3,12 +3,15 @@
 use std::cell::Cell;
 use std::ffi::CString;
 use std::os::raw::*;
+use std::path::Path;
 use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
 
 mod ats_plugin;
 use ats_plugin::*;
 
 const ARRAY_LENGTH: usize = 256;
+
+struct LoadFailure;
 
 type LoadFn = unsafe extern "system" fn();
 type DisposeFn = unsafe extern "system" fn();
@@ -46,6 +49,15 @@ struct ChildPlugin {
     set_signal: Option<SetSignalFn>,
     set_beacon_data: Option<SetBeaconDataFn>,
     last_input: AtsHandles,
+}
+
+impl Drop for ChildPlugin {
+    fn drop(&mut self) {
+        use winapi::um::libloaderapi::FreeLibrary;
+        unsafe {
+            FreeLibrary(self.handle);
+        }
+    }
 }
 
 macro_rules! load_function {
@@ -87,6 +99,19 @@ impl ChildPlugin {
                 reverser: 0,
                 constant_speed: ATS_CONSTANTSPEED_CONTINUE,
             },
+        }
+    }
+
+    fn load(path: &Path) -> Result<Self, LoadFailure> {
+        use std::os::windows::ffi::OsStrExt;
+        use winapi::um::libloaderapi::LoadLibraryW;
+        let mut path: Vec<_> = path.as_os_str().encode_wide().collect();
+        path.push(0x0000);
+        let module = unsafe { LoadLibraryW(path.as_ptr()) };
+        if module.is_null() {
+            Err(LoadFailure)
+        } else {
+            Ok(Self::from_handle(module))
         }
     }
 }
