@@ -1,8 +1,12 @@
-# BVE Trainsim ATS Plugin made with Rust
+# BVE Trainsim ATS Plugin Multiplexer
 
 ## 概要
 
-BVE の ATS プラグインの Rust での実装テンプレートです。
+Rust で書いた "DetailManager" のクローンです。
+一つの車両で複数のプラグインが使えるようにします。
+
+オリジナルの "DetailManager" は活発にメンテナンスされておらず、複数のバグがあります。
+このクローンはそれらを解決します。
 
 ## ライセンス
 

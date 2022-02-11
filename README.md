@@ -1,8 +1,12 @@
-# BVE Trainsim ATS Plugin made with Rust
+# BVE Trainsim ATS Plugin Multiplexer
 
 ## Overview
 
-A BVE Trainsim ATS-Plugin implementation template in Rust.
+A "DetailManager" clone written in Rust.
+The multiplexer allows you to use more than one plugins in a vehicle.
+
+The original "DetailManager" is no longer actively maintained and has many bugs.
+This clone addresses those issues.
 
 ## License
 
