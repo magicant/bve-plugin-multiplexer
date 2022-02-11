@@ -1,6 +1,7 @@
 #![cfg(windows)]
 
 use std::cell::Cell;
+use std::ffi::CString;
 use std::os::raw::*;
 use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
 
@@ -8,6 +9,87 @@ mod ats_plugin;
 use ats_plugin::*;
 
 const ARRAY_LENGTH: usize = 256;
+
+type LoadFn = unsafe extern "system" fn();
+type DisposeFn = unsafe extern "system" fn();
+type GetPluginVersionFn = unsafe extern "system" fn() -> c_int;
+type SetVehicleSpecFn = unsafe extern "system" fn(AtsVehicleSpec);
+type InitializeFn = unsafe extern "system" fn(c_int);
+type ElapseFn = unsafe extern "system" fn(AtsVehicleState, *mut c_int, *mut c_int) -> AtsHandles;
+type SetPowerFn = unsafe extern "system" fn(c_int);
+type SetBrakeFn = unsafe extern "system" fn(c_int);
+type SetReverserFn = unsafe extern "system" fn(c_int);
+type KeyDownFn = unsafe extern "system" fn(c_int);
+type KeyUpFn = unsafe extern "system" fn(c_int);
+type HornBlowFn = unsafe extern "system" fn(c_int);
+type DoorOpenFn = unsafe extern "system" fn();
+type DoorCloseFn = unsafe extern "system" fn();
+type SetSignalFn = unsafe extern "system" fn(c_int);
+type SetBeaconDataFn = unsafe extern "system" fn(AtsBeaconData);
+
+struct ChildPlugin {
+    handle: HMODULE,
+    load: Option<LoadFn>,
+    dispose: Option<DisposeFn>,
+    get_plugin_version: Option<GetPluginVersionFn>,
+    set_vehicle_spec: Option<SetVehicleSpecFn>,
+    initialize: Option<InitializeFn>,
+    elapse: Option<ElapseFn>,
+    set_power: Option<SetPowerFn>,
+    set_brake: Option<SetBrakeFn>,
+    set_reverser: Option<SetReverserFn>,
+    key_down: Option<KeyDownFn>,
+    key_up: Option<KeyUpFn>,
+    horn_blow: Option<HornBlowFn>,
+    door_open: Option<DoorOpenFn>,
+    door_close: Option<DoorCloseFn>,
+    set_signal: Option<SetSignalFn>,
+    set_beacon_data: Option<SetBeaconDataFn>,
+    last_input: AtsHandles,
+}
+
+macro_rules! load_function {
+    ($handle:expr, $name:expr) => {{
+        use winapi::um::libloaderapi::GetProcAddress;
+        let name = CString::new($name).unwrap();
+        let f = unsafe { GetProcAddress($handle, name.as_ptr()) };
+        if f.is_null() {
+            None
+        } else {
+            Some(unsafe { std::mem::transmute(f) })
+        }
+    }};
+}
+
+impl ChildPlugin {
+    fn from_handle(handle: HMODULE) -> Self {
+        ChildPlugin {
+            handle,
+            load: load_function!(handle, "Load"),
+            dispose: load_function!(handle, "Dispose"),
+            get_plugin_version: load_function!(handle, "GetPluginVersion"),
+            set_vehicle_spec: load_function!(handle, "SetVehicleSpec"),
+            initialize: load_function!(handle, "Initialize"),
+            elapse: load_function!(handle, "Elapse"),
+            set_power: load_function!(handle, "SetPower"),
+            set_brake: load_function!(handle, "SetBrake"),
+            set_reverser: load_function!(handle, "SetReverser"),
+            key_down: load_function!(handle, "KeyDown"),
+            key_up: load_function!(handle, "KeyUp"),
+            horn_blow: load_function!(handle, "HornBlow"),
+            door_open: load_function!(handle, "DoorOpen"),
+            door_close: load_function!(handle, "DoorClose"),
+            set_signal: load_function!(handle, "SetSignal"),
+            set_beacon_data: load_function!(handle, "SetBeaconData"),
+            last_input: AtsHandles {
+                power: 0,
+                brake: 0,
+                reverser: 0,
+                constant_speed: ATS_CONSTANTSPEED_CONTINUE,
+            },
+        }
+    }
+}
 
 thread_local! {
     static POWER: Cell<c_int> = Cell::new(0);
