@@ -12,8 +12,6 @@ use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
 mod ats_plugin;
 use ats_plugin::*;
 
-const ARRAY_LENGTH: usize = 256;
-
 #[derive(Debug)]
 struct LoadFailure;
 
@@ -52,7 +50,7 @@ struct ChildPlugin {
     door_close: Option<DoorCloseFn>,
     set_signal: Option<SetSignalFn>,
     set_beacon_data: Option<SetBeaconDataFn>,
-    last_input: AtsHandles,
+    last_input: Option<AtsHandles>,
 }
 
 impl Drop for ChildPlugin {
@@ -97,12 +95,7 @@ impl ChildPlugin {
             door_close: load_function!(handle, "DoorClose"),
             set_signal: load_function!(handle, "SetSignal"),
             set_beacon_data: load_function!(handle, "SetBeaconData"),
-            last_input: AtsHandles {
-                power: 0,
-                brake: 0,
-                reverser: 0,
-                constant_speed: ATS_CONSTANTSPEED_CONTINUE,
-            },
+            last_input: None,
         }
     }
 
@@ -117,6 +110,46 @@ impl ChildPlugin {
         } else {
             Ok(Self::from_handle(module))
         }
+    }
+
+    fn input_and_elapse(
+        &mut self,
+        mut handles: AtsHandles,
+        vehicle_state: AtsVehicleState,
+        panel: *mut c_int,
+        sound: *mut c_int,
+    ) -> AtsHandles {
+        if self.last_input.map(|h| h.power) != Some(handles.power) {
+            if let Some(set_power) = self.set_power {
+                unsafe {
+                    set_power(handles.power);
+                }
+            }
+        }
+        if self.last_input.map(|h| h.brake) != Some(handles.brake) {
+            if let Some(set_brake) = self.set_brake {
+                unsafe {
+                    set_brake(handles.brake);
+                }
+            }
+        }
+        if self.last_input.map(|h| h.reverser) != Some(handles.reverser) {
+            if let Some(set_reverser) = self.set_reverser {
+                unsafe {
+                    set_reverser(handles.reverser);
+                }
+            }
+        }
+        self.last_input = Some(handles);
+
+        if let Some(elapse) = self.elapse {
+            let new_handles = unsafe { elapse(vehicle_state, panel, sound) };
+            handles = AtsHandles {
+                constant_speed: new_handles.constant_speed.max(handles.constant_speed),
+                ..new_handles
+            };
+        }
+        handles
     }
 }
 
@@ -238,23 +271,24 @@ pub extern "system" fn Initialize(brake: c_int) {
 #[no_mangle]
 #[allow(non_snake_case)]
 pub unsafe extern "system" fn Elapse(
-    _vehicle_state: AtsVehicleState,
-    p_panel: *mut c_int,
-    p_sound: *mut c_int,
+    vehicle_state: AtsVehicleState,
+    panel: *mut c_int,
+    sound: *mut c_int,
 ) -> AtsHandles {
-    let _panel = std::slice::from_raw_parts_mut(p_panel, ARRAY_LENGTH);
-    let _sound = std::slice::from_raw_parts_mut(p_sound, ARRAY_LENGTH);
-
-    // TODO Call child plugins
-
     MULTIPLEXER.with(|multiplexer| {
-        let multiplexer = multiplexer.borrow();
-        AtsHandles {
+        let mut multiplexer = multiplexer.borrow_mut();
+        let mut handles = AtsHandles {
             brake: multiplexer.brake_input,
             power: multiplexer.power_input,
             reverser: multiplexer.reverser_input,
             constant_speed: ATS_CONSTANTSPEED_CONTINUE,
+        };
+
+        for child in &mut multiplexer.children {
+            handles = child.input_and_elapse(handles, vehicle_state, panel, sound);
         }
+
+        handles
     })
 }
 
