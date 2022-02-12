@@ -1,6 +1,5 @@
 #![cfg(windows)]
 
-use std::cell::Cell;
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::ffi::OsString;
@@ -125,13 +124,13 @@ impl ChildPlugin {
 struct Multiplexer {
     path: PathBuf,
     children: Vec<ChildPlugin>,
+    power_input: c_int,
+    brake_input: c_int,
+    reverser_input: c_int,
 }
 
 thread_local! {
     static MULTIPLEXER: RefCell<Multiplexer> = RefCell::new(Multiplexer::default());
-    static POWER: Cell<c_int> = Cell::new(0);
-    static BRAKE: Cell<c_int> = Cell::new(0);
-    static REVERSER: Cell<c_int> = Cell::new(0);
 }
 
 fn get_module_file_name(module: HMODULE) -> Result<PathBuf, LoadFailure> {
@@ -248,39 +247,45 @@ pub unsafe extern "system" fn Elapse(
 
     // TODO Call child plugins
 
-    AtsHandles {
-        brake: BRAKE.with(Cell::get),
-        power: POWER.with(Cell::get),
-        reverser: REVERSER.with(Cell::get),
-        constant_speed: ATS_CONSTANTSPEED_CONTINUE,
-    }
+    MULTIPLEXER.with(|multiplexer| {
+        let multiplexer = multiplexer.borrow();
+        AtsHandles {
+            brake: multiplexer.brake_input,
+            power: multiplexer.power_input,
+            reverser: multiplexer.reverser_input,
+            constant_speed: ATS_CONSTANTSPEED_CONTINUE,
+        }
+    })
 }
 
 /// Called when the power is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetPower(notch: c_int) {
-    POWER.with(|power| {
-        power.set(notch);
-    });
+    MULTIPLEXER.with(|multiplexer| {
+        let mut multiplexer = multiplexer.borrow_mut();
+        multiplexer.power_input = notch;
+    })
 }
 
 /// Called when the brake is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetBrake(notch: c_int) {
-    BRAKE.with(|brake| {
-        brake.set(notch);
-    });
+    MULTIPLEXER.with(|multiplexer| {
+        let mut multiplexer = multiplexer.borrow_mut();
+        multiplexer.brake_input = notch;
+    })
 }
 
 /// Called when the reverser is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetReverser(pos: c_int) {
-    REVERSER.with(|reverser| {
-        reverser.set(pos);
-    });
+    MULTIPLEXER.with(|multiplexer| {
+        let mut multiplexer = multiplexer.borrow_mut();
+        multiplexer.reverser_input = pos;
+    })
 }
 
 /// Called when any ATS key is pressed
