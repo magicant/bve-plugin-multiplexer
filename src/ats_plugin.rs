@@ -58,6 +58,7 @@ pub const ATS_CONSTANTSPEED_DISABLE: c_int = 2; // Disable
 
 // Vehicle Specification
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct AtsVehicleSpec {
     pub brake_notches: c_int, // Number of Brake Notches
     pub power_notches: c_int, // Number of Power Notches
@@ -68,6 +69,7 @@ pub struct AtsVehicleSpec {
 
 // State Quantity of Vehicle
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct AtsVehicleState {
     pub location: c_double,    // Train Position (Z-axis) (m)
     pub speed: c_float,        // Train Speed (km/h)
@@ -82,6 +84,7 @@ pub struct AtsVehicleState {
 
 // Received Data from Beacon
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct AtsBeaconData {
     pub beacon_type: c_int, // Type of Beacon
     pub signal: c_int,      // Signal of Connected Section
@@ -91,6 +94,7 @@ pub struct AtsBeaconData {
 
 // Train Operation Instruction
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct AtsHandles {
     pub brake: c_int,          // Brake Notch
     pub power: c_int,          // Power Notch
