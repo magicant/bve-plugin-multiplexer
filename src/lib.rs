@@ -1,9 +1,13 @@
 #![cfg(windows)]
 
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::ffi::CString;
+use std::ffi::OsString;
 use std::os::raw::*;
+use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
+use std::path::PathBuf;
 use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
 
 mod ats_plugin;
@@ -11,6 +15,7 @@ use ats_plugin::*;
 
 const ARRAY_LENGTH: usize = 256;
 
+#[derive(Debug)]
 struct LoadFailure;
 
 type LoadFn = unsafe extern "system" fn();
@@ -116,25 +121,47 @@ impl ChildPlugin {
     }
 }
 
+#[derive(Default)]
+struct Multiplexer {
+    path: PathBuf,
+}
+
 thread_local! {
+    static MULTIPLEXER: RefCell<Multiplexer> = RefCell::new(Multiplexer::default());
     static POWER: Cell<c_int> = Cell::new(0);
     static BRAKE: Cell<c_int> = Cell::new(0);
     static REVERSER: Cell<c_int> = Cell::new(0);
 }
 
+fn get_module_file_name(module: HMODULE) -> Result<PathBuf, LoadFailure> {
+    use winapi::um::libloaderapi::GetModuleFileNameW;
+
+    const LEN: DWORD = 0x8000;
+    let mut buf = std::iter::repeat(0).take(LEN as usize).collect::<Vec<_>>();
+    let len = unsafe { GetModuleFileNameW(module, buf.as_mut_ptr(), LEN) };
+    if 0 < len && len < LEN {
+        Ok(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
+    } else {
+        Err(LoadFailure)
+    }
+}
+
 #[no_mangle]
 #[allow(non_snake_case)]
-extern "system" fn DllMain(_dll_module: HMODULE, call_reason: DWORD, _reserved: LPVOID) -> BOOL {
+extern "system" fn DllMain(dll_module: HMODULE, call_reason: DWORD, _reserved: LPVOID) -> BOOL {
     const DLL_PROCESS_ATTACH: DWORD = 1;
     const DLL_THREAD_ATTACH: DWORD = 2;
     const DLL_THREAD_DETACH: DWORD = 3;
     const DLL_PROCESS_DETACH: DWORD = 0;
 
     match call_reason {
-        DLL_PROCESS_ATTACH => (),
-        DLL_THREAD_ATTACH => (),
-        DLL_THREAD_DETACH => (),
-        DLL_PROCESS_DETACH => (),
+        DLL_PROCESS_ATTACH | DLL_THREAD_ATTACH => {
+            MULTIPLEXER.with(|multiplexer| {
+                let mut multiplexer = multiplexer.borrow_mut();
+                multiplexer.path = get_module_file_name(dll_module).unwrap();
+            });
+        }
+        DLL_THREAD_DETACH | DLL_PROCESS_DETACH => (),
         _ => (),
     }
 
