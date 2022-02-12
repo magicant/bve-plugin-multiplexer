@@ -141,42 +141,48 @@ extern "system" fn DllMain(_dll_module: HMODULE, call_reason: DWORD, _reserved: 
     TRUE
 }
 
-// Called when this plug-in is loaded
+/// Called when this plug-in is loaded
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Load() {}
 
-// Called when this plug_in is unloaded
+/// Called when this plug_in is unloaded
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Dispose() {}
 
-// Returns the version numbers of ATS plug-in
+/// Returns the version numbers of ATS plug-in
 #[no_mangle]
 pub extern "system" fn GetPluginVersion() -> c_int {
     ATS_VERSION
 }
 
-// Called when the train is loaded
+/// Called when the train is loaded
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetVehicleSpec(_vehicle_spec: AtsVehicleSpec) {}
 
-// Called when the game is started
+/// Called when the game is started
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Initialize(_brake: c_int) {}
 
-// Called every frame
+/// Called every frame
+///
+/// # Safety
+///
+/// This function is marked as `unsafe` because it accesses the arrays pointed to by the argument
+/// pointers. It is the caller's responsibility to make sure the arrays have 256 elements each and
+/// have been properly initialized.
 #[no_mangle]
 #[allow(non_snake_case)]
-pub extern "system" fn Elapse(
+pub unsafe extern "system" fn Elapse(
     _vehicle_state: AtsVehicleState,
     p_panel: *mut c_int,
     p_sound: *mut c_int,
 ) -> AtsHandles {
-    let _panel = unsafe { std::slice::from_raw_parts_mut(p_panel, ARRAY_LENGTH) };
-    let _sound = unsafe { std::slice::from_raw_parts_mut(p_sound, ARRAY_LENGTH) };
+    let _panel = std::slice::from_raw_parts_mut(p_panel, ARRAY_LENGTH);
+    let _sound = std::slice::from_raw_parts_mut(p_sound, ARRAY_LENGTH);
 
     AtsHandles {
         brake: BRAKE.with(Cell::get),
@@ -186,7 +192,7 @@ pub extern "system" fn Elapse(
     }
 }
 
-// Called when the power is changed
+/// Called when the power is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetPower(notch: c_int) {
@@ -195,7 +201,7 @@ pub extern "system" fn SetPower(notch: c_int) {
     });
 }
 
-// Called when the brake is changed
+/// Called when the brake is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetBrake(notch: c_int) {
@@ -204,7 +210,7 @@ pub extern "system" fn SetBrake(notch: c_int) {
     });
 }
 
-// Called when the reverser is changed
+/// Called when the reverser is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetReverser(pos: c_int) {
@@ -213,37 +219,37 @@ pub extern "system" fn SetReverser(pos: c_int) {
     });
 }
 
-// Called when any ATS key is pressed
+/// Called when any ATS key is pressed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn KeyDown(_ats_key_code: c_int) {}
 
-// Called when any ATS key is released
+/// Called when any ATS key is released
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn KeyUp(_ats_key_code: c_int) {}
 
-// Called when the horn is used
+/// Called when the horn is used
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn HornBlow(_horn_type: c_int) {}
 
-// Called when the door is opened
+/// Called when the door is opened
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn DoorOpen() {}
 
-// Called when the door is closed
+/// Called when the door is closed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn DoorClose() {}
 
-// Called when current signal is changed
+/// Called when current signal is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetSignal(_signal: c_int) {}
 
-// Called when the beacon data is received
+/// Called when the beacon data is received
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetBeaconData(_beacon_data: AtsBeaconData) {}
