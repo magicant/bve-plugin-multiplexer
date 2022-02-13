@@ -205,7 +205,51 @@ extern "system" fn DllMain(dll_module: HMODULE, call_reason: DWORD, _reserved: L
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Load() {
-    //TODO Load child plugins
+    MULTIPLEXER.with(|multiplexer| {
+        let mut multiplexer = multiplexer.borrow_mut();
+        let multiplexer = &mut *multiplexer;
+
+        let list_file_path = {
+            let mut path = multiplexer.path.clone();
+            path.set_extension("txt");
+            path
+        };
+        let list = match std::fs::read_to_string(list_file_path) {
+            Ok(list) => list,
+            Err(_) => return,
+        };
+
+        let directory_path = match multiplexer.path.parent() {
+            Some(path) => path,
+            None => return,
+        };
+
+        multiplexer.children.reserve_exact(list.lines().count());
+        for relative_path in list.lines() {
+            let dll_absolute_path = {
+                let mut path = directory_path.to_path_buf();
+                path.push(relative_path);
+                if !path.starts_with(directory_path) {
+                    // The `relative_path` is not really relative, so it should
+                    // be ignored. The path must be relative to make the list
+                    // portable.
+                    continue;
+                }
+                path
+            };
+
+            let child = match ChildPlugin::load(&dll_absolute_path) {
+                Ok(child) => child,
+                Err(_) => continue,
+            };
+            if let Some(load) = child.load {
+                unsafe {
+                    load();
+                }
+            }
+            multiplexer.children.push(child);
+        }
+    })
 }
 
 /// Called when this plug_in is unloaded
