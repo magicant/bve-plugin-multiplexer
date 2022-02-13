@@ -11,5 +11,11 @@ name = "pluginmultiplexer"
 path = "src/lib.rs"
 crate-type = ["cdylib"]
 
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+codegen-units = 1
+
 [dependencies]
 winapi = { version = "0.3.9", features = ["minwindef", "libloaderapi"] }
