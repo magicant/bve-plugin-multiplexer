@@ -2,15 +2,41 @@
 
 ## Overview
 
-A "DetailManager" clone written in Rust.
-The multiplexer allows you to use more than one plugins in a vehicle.
+The Plugin Multiplexer is a "DetailManager" clone written in Rust. It allows you to use more than one plugin in a vehicle.
 
-The original "DetailManager" is no longer actively maintained and has many bugs.
-This clone addresses those issues.
+## Differences from the original DetailManager
+
+The name of the text file containing the file name of the child plugins is not limited to `detailmodules.txt` but can be changed in conjunction with the DLL file name. That makes it possible to put the 32-bit and 64-bit versions in the same folder.
+
+If a child plugin fails to load, the Plugin Multiplexer will display an error dialog.
+
+The Plugin Multiplexer calls the child plugin's SetPower, SetBrake, and SetReverser if and only if needed. In DetailManager, there are cases where these are not called or are called excessively right after the scenario starts.
 
 ## License
 
 [Unlicense](http://unlicense.org)
+
+## How to use
+
+1. Download bve-plugin-multiplexer-v1.zip from the [release page](https://github.com/magicant/bve-plugin-multiplexer/releases).
+1. Move the pluginmultiplexer32.dll and pluginmultiplexer64.dll into the vehicle data folder.
+1. In the [vehicle file](http://bvets.net/en/edit/formats/vehicle/vehicle.html) (usually named something like Vehicle.txt), enter the relative paths to pluginmultiplexer32.dll and pluginmultiplexer64.dll in `Ats32` and `Ats64`, respectively.
+    - If the vehicle file version is older, enter the relative path to pluginmultiplexer32.dll in `Ats`. You cannot use the 64-bit version in this case.
+    - The relative path is based on the vehicle files' folder.
+1. Create a text file named pluginmultiplexer32.txt in the same folder as pluginmultiplexer32.dll and enter the relative paths to 32-bit plugins you want to load, one line for each plugin.
+    - The relative path is based on the folder where pluginmultiplexer32.dll is located.
+1. Create a text file named pluginmultiplexer64.txt in the same folder as pluginmultiplexer64.dll and enter the relative paths to 64-bit plugins you want to load, one line for each plugin.
+    - The relative path is based on the folder where pluginmultiplexer64.dll is located.
+
+### Note
+
+- If you rename the DLL file, please rename the text file as well.  You must align all parts of the file names except for the extension.
+- You can put the 32-bit and 64-bit versions in the same folder or separate them into different folders. Either way, the text file corresponding to the DLL file needs to be in the same folder.
+- If you get an error dialog at the start of a scenario, please read the message carefully and correct any mistakes.
+    - Is the file name spelled correctly?
+    - Is the file name specified as a relative path?
+    - Is the base folder for relative paths correct?
+    - Are you using the correct version of the plugin? You cannot use the 32-bit Plugin Multiplexer to load 64-bit plugins or vice versa.
 
 ## How to build
 
