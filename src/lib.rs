@@ -2,18 +2,46 @@
 
 use std::cell::RefCell;
 use std::ffi::CString;
+use std::ffi::OsStr;
 use std::ffi::OsString;
+use std::io::Error;
+use std::io::ErrorKind;
 use std::os::raw::*;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
 use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
+use winapi::shared::ntdef::WCHAR;
 
 mod ats_plugin;
 use ats_plugin::*;
 
+fn to_wide_string_with_null<S: AsRef<OsStr>>(s: S) -> Vec<WCHAR> {
+    use std::os::windows::ffi::OsStrExt;
+    let mut wide_string = s.as_ref().encode_wide().collect::<Vec<_>>();
+    wide_string.push(0);
+    wide_string
+}
+
 #[derive(Debug)]
-struct LoadFailure;
+struct ModuleFileNameError;
+
+#[derive(Debug)]
+struct LoadError {
+    path: PathBuf,
+    error: Error,
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Failed to load file '{}': {}",
+            self.path.to_string_lossy(),
+            self.error
+        )
+    }
+}
 
 type LoadFn = unsafe extern "system" fn();
 type DisposeFn = unsafe extern "system" fn();
@@ -99,14 +127,15 @@ impl ChildPlugin {
         }
     }
 
-    fn load(path: &Path) -> Result<Self, LoadFailure> {
-        use std::os::windows::ffi::OsStrExt;
+    fn load(path: &Path) -> Result<Self, LoadError> {
         use winapi::um::libloaderapi::LoadLibraryW;
-        let mut path: Vec<_> = path.as_os_str().encode_wide().collect();
-        path.push(0x0000);
-        let module = unsafe { LoadLibraryW(path.as_ptr()) };
+        let os_path = to_wide_string_with_null(path);
+        let module = unsafe { LoadLibraryW(os_path.as_ptr()) };
         if module.is_null() {
-            Err(LoadFailure)
+            Err(LoadError {
+                path: path.to_path_buf(),
+                error: Error::last_os_error(),
+            })
         } else {
             Ok(Self::from_handle(module))
         }
@@ -162,11 +191,65 @@ struct Multiplexer {
     reverser_input: c_int,
 }
 
+impl Multiplexer {
+    fn load(&mut self) -> Result<(), LoadError> {
+        let list_file_path = {
+            let mut path = self.path.clone();
+            path.set_extension("txt");
+            path
+        };
+        let list = match std::fs::read_to_string(&list_file_path) {
+            Ok(list) => list,
+            Err(error) => {
+                return Err(LoadError {
+                    path: list_file_path,
+                    error,
+                })
+            }
+        };
+
+        let directory_path = self.path.parent().unwrap();
+
+        self.children.reserve_exact(list.lines().count());
+        let last_error = list
+            .lines()
+            .map(|relative_path| {
+                let dll_absolute_path = {
+                    let mut path = directory_path.to_path_buf();
+                    path.push(relative_path);
+                    if !path.starts_with(directory_path) {
+                        // The path must be relative to make the list portable.
+                        return Err(LoadError {
+                            path: PathBuf::from(relative_path),
+                            error: Error::new(ErrorKind::Other, "Non-relative path rejected"),
+                        });
+                    }
+                    path
+                };
+
+                let child = ChildPlugin::load(&dll_absolute_path)?;
+                if let Some(load) = child.load {
+                    unsafe {
+                        load();
+                    }
+                }
+                self.children.push(child);
+                Ok(())
+            })
+            .filter_map(Result::err)
+            .last();
+        match last_error {
+            None => Ok(()),
+            Some(error) => Err(error),
+        }
+    }
+}
+
 thread_local! {
     static MULTIPLEXER: RefCell<Multiplexer> = RefCell::new(Multiplexer::default());
 }
 
-fn get_module_file_name(module: HMODULE) -> Result<PathBuf, LoadFailure> {
+fn get_module_file_name(module: HMODULE) -> Result<PathBuf, ModuleFileNameError> {
     use winapi::um::libloaderapi::GetModuleFileNameW;
 
     const LEN: DWORD = 0x8000;
@@ -175,7 +258,7 @@ fn get_module_file_name(module: HMODULE) -> Result<PathBuf, LoadFailure> {
     if 0 < len && len < LEN {
         Ok(PathBuf::from(OsString::from_wide(&buf[..len as usize])))
     } else {
-        Err(LoadFailure)
+        Err(ModuleFileNameError)
     }
 }
 
@@ -201,53 +284,27 @@ extern "system" fn DllMain(dll_module: HMODULE, call_reason: DWORD, _reserved: L
     TRUE
 }
 
+fn show_error_dialog(error: LoadError, main_path: &Path) {
+    use winapi::um::winuser::{MessageBoxW, MB_ICONWARNING, MB_OK, MB_TASKMODAL};
+    let window = std::ptr::null_mut();
+    let text = to_wide_string_with_null(error.to_string());
+    let caption =
+        to_wide_string_with_null(main_path.file_name().unwrap_or_else(|| OsStr::new("Error")));
+    let r#type = MB_OK | MB_ICONWARNING | MB_TASKMODAL;
+    unsafe {
+        MessageBoxW(window, text.as_ptr(), caption.as_ptr(), r#type);
+    }
+}
+
 /// Called when this plug-in is loaded
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Load() {
     MULTIPLEXER.with(|multiplexer| {
         let mut multiplexer = multiplexer.borrow_mut();
-        let multiplexer = &mut *multiplexer;
-
-        let list_file_path = {
-            let mut path = multiplexer.path.clone();
-            path.set_extension("txt");
-            path
-        };
-        let list = match std::fs::read_to_string(list_file_path) {
-            Ok(list) => list,
-            Err(_) => return,
-        };
-
-        let directory_path = match multiplexer.path.parent() {
-            Some(path) => path,
-            None => return,
-        };
-
-        multiplexer.children.reserve_exact(list.lines().count());
-        for relative_path in list.lines() {
-            let dll_absolute_path = {
-                let mut path = directory_path.to_path_buf();
-                path.push(relative_path);
-                if !path.starts_with(directory_path) {
-                    // The `relative_path` is not really relative, so it should
-                    // be ignored. The path must be relative to make the list
-                    // portable.
-                    continue;
-                }
-                path
-            };
-
-            let child = match ChildPlugin::load(&dll_absolute_path) {
-                Ok(child) => child,
-                Err(_) => continue,
-            };
-            if let Some(load) = child.load {
-                unsafe {
-                    load();
-                }
-            }
-            multiplexer.children.push(child);
+        match multiplexer.load() {
+            Ok(()) => (),
+            Err(error) => show_error_dialog(error, &multiplexer.path),
         }
     })
 }
