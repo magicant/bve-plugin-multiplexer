@@ -1,6 +1,6 @@
 #![cfg(windows)]
 
-use std::cell::RefCell;
+use once_cell::sync::Lazy;
 use std::ffi::CString;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -10,6 +10,7 @@ use std::os::raw::*;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use winapi::shared::minwindef::{BOOL, DWORD, HMODULE, LPVOID, TRUE};
 use winapi::shared::ntdef::WCHAR;
 
@@ -80,6 +81,11 @@ struct ChildPlugin {
     set_beacon_data: Option<SetBeaconDataFn>,
     last_input: Option<AtsHandles>,
 }
+
+// SAFETY: ChildPlugin is not Send by default because of the `handle` field,
+// which contains a raw pointer. It is safe to make it Send because the handle
+// is only used in `drop`, which is not called concurrently.
+unsafe impl Send for ChildPlugin {}
 
 impl Drop for ChildPlugin {
     fn drop(&mut self) {
@@ -245,9 +251,7 @@ impl Multiplexer {
     }
 }
 
-thread_local! {
-    static MULTIPLEXER: RefCell<Multiplexer> = RefCell::new(Multiplexer::default());
-}
+static MULTIPLEXER: Lazy<Mutex<Multiplexer>> = Lazy::new(|| Mutex::new(Multiplexer::default()));
 
 fn get_module_file_name(module: HMODULE) -> Result<PathBuf, ModuleFileNameError> {
     use winapi::um::libloaderapi::GetModuleFileNameW;
@@ -272,10 +276,8 @@ extern "system" fn DllMain(dll_module: HMODULE, call_reason: DWORD, _reserved: L
 
     match call_reason {
         DLL_PROCESS_ATTACH | DLL_THREAD_ATTACH => {
-            MULTIPLEXER.with(|multiplexer| {
-                let mut multiplexer = multiplexer.borrow_mut();
-                multiplexer.path = get_module_file_name(dll_module).unwrap();
-            });
+            let mut multiplexer = MULTIPLEXER.lock().unwrap();
+            multiplexer.path = get_module_file_name(dll_module).unwrap();
         }
         DLL_THREAD_DETACH | DLL_PROCESS_DETACH => (),
         _ => (),
@@ -300,30 +302,26 @@ fn show_error_dialog(error: LoadError, main_path: &Path) {
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Load() {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        match multiplexer.load() {
-            Ok(()) => (),
-            Err(error) => show_error_dialog(error, &multiplexer.path),
-        }
-    })
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    match multiplexer.load() {
+        Ok(()) => (),
+        Err(error) => show_error_dialog(error, &multiplexer.path),
+    }
 }
 
 /// Called when this plug_in is unloaded
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Dispose() {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        for child in &multiplexer.children {
-            if let Some(dispose) = child.dispose {
-                unsafe {
-                    dispose();
-                }
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(dispose) = child.dispose {
+            unsafe {
+                dispose();
             }
         }
-        multiplexer.children.clear();
-    })
+    }
+    multiplexer.children.clear();
 }
 
 /// Returns the version numbers of ATS plug-in
@@ -336,30 +334,28 @@ pub extern "system" fn GetPluginVersion() -> c_int {
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetVehicleSpec(vehicle_spec: AtsVehicleSpec) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(set_vehicle_spec) = child.set_vehicle_spec {
-                unsafe {
-                    set_vehicle_spec(vehicle_spec);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(set_vehicle_spec) = child.set_vehicle_spec {
+            unsafe {
+                set_vehicle_spec(vehicle_spec);
             }
         }
-    })
+    }
 }
 
 /// Called when the game is started
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn Initialize(brake: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(initialize) = child.initialize {
-                unsafe {
-                    initialize(brake);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(initialize) = child.initialize {
+            unsafe {
+                initialize(brake);
             }
         }
-    })
+    }
 }
 
 /// Called every frame
@@ -376,154 +372,139 @@ pub unsafe extern "system" fn Elapse(
     panel: *mut c_int,
     sound: *mut c_int,
 ) -> AtsHandles {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        let mut handles = AtsHandles {
-            brake: multiplexer.brake_input,
-            power: multiplexer.power_input,
-            reverser: multiplexer.reverser_input,
-            constant_speed: ATS_CONSTANTSPEED_CONTINUE,
-        };
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    let mut handles = AtsHandles {
+        brake: multiplexer.brake_input,
+        power: multiplexer.power_input,
+        reverser: multiplexer.reverser_input,
+        constant_speed: ATS_CONSTANTSPEED_CONTINUE,
+    };
 
-        for child in &mut multiplexer.children {
-            handles = child.input_and_elapse(handles, vehicle_state, panel, sound);
-        }
+    for child in &mut multiplexer.children {
+        handles = child.input_and_elapse(handles, vehicle_state, panel, sound);
+    }
 
-        handles
-    })
+    handles
 }
 
 /// Called when the power is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetPower(notch: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        multiplexer.power_input = notch;
-    })
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    multiplexer.power_input = notch;
 }
 
 /// Called when the brake is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetBrake(notch: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        multiplexer.brake_input = notch;
-    })
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    multiplexer.brake_input = notch;
 }
 
 /// Called when the reverser is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetReverser(pos: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        let mut multiplexer = multiplexer.borrow_mut();
-        multiplexer.reverser_input = pos;
-    })
+    let mut multiplexer = MULTIPLEXER.lock().unwrap();
+    multiplexer.reverser_input = pos;
 }
 
 /// Called when any ATS key is pressed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn KeyDown(key_code: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(key_down) = child.key_down {
-                unsafe {
-                    key_down(key_code);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(key_down) = child.key_down {
+            unsafe {
+                key_down(key_code);
             }
         }
-    })
+    }
 }
 
 /// Called when any ATS key is released
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn KeyUp(key_code: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(key_up) = child.key_up {
-                unsafe {
-                    key_up(key_code);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(key_up) = child.key_up {
+            unsafe {
+                key_up(key_code);
             }
         }
-    })
+    }
 }
 
 /// Called when the horn is used
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn HornBlow(horn_type: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(horn_blow) = child.horn_blow {
-                unsafe {
-                    horn_blow(horn_type);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(horn_blow) = child.horn_blow {
+            unsafe {
+                horn_blow(horn_type);
             }
         }
-    })
+    }
 }
 
 /// Called when the door is opened
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn DoorOpen() {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(door_open) = child.door_open {
-                unsafe {
-                    door_open();
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(door_open) = child.door_open {
+            unsafe {
+                door_open();
             }
         }
-    })
+    }
 }
 
 /// Called when the door is closed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn DoorClose() {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(door_close) = child.door_close {
-                unsafe {
-                    door_close();
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(door_close) = child.door_close {
+            unsafe {
+                door_close();
             }
         }
-    })
+    }
 }
 
 /// Called when current signal is changed
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetSignal(signal: c_int) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(set_signal) = child.set_signal {
-                unsafe {
-                    set_signal(signal);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(set_signal) = child.set_signal {
+            unsafe {
+                set_signal(signal);
             }
         }
-    })
+    }
 }
 
 /// Called when the beacon data is received
 #[no_mangle]
 #[allow(non_snake_case)]
 pub extern "system" fn SetBeaconData(beacon_data: AtsBeaconData) {
-    MULTIPLEXER.with(|multiplexer| {
-        for child in &multiplexer.borrow().children {
-            if let Some(set_beacon_data) = child.set_beacon_data {
-                unsafe {
-                    set_beacon_data(beacon_data);
-                }
+    let multiplexer = MULTIPLEXER.lock().unwrap();
+    for child in &multiplexer.children {
+        if let Some(set_beacon_data) = child.set_beacon_data {
+            unsafe {
+                set_beacon_data(beacon_data);
             }
         }
-    })
+    }
 }
