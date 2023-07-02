@@ -275,11 +275,13 @@ extern "system" fn DllMain(dll_module: HMODULE, call_reason: DWORD, _reserved: L
     const DLL_PROCESS_DETACH: DWORD = 0;
 
     match call_reason {
-        DLL_PROCESS_ATTACH | DLL_THREAD_ATTACH => {
+        DLL_PROCESS_ATTACH => {
             let mut multiplexer = MULTIPLEXER.lock().unwrap();
             multiplexer.path = get_module_file_name(dll_module).unwrap();
         }
-        DLL_THREAD_DETACH | DLL_PROCESS_DETACH => (),
+        DLL_THREAD_ATTACH => (),
+        DLL_THREAD_DETACH => (),
+        DLL_PROCESS_DETACH => (),
         _ => (),
     }
 
